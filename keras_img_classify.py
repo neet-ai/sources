@@ -1,4 +1,5 @@
 #! -*- coding: utf-8 -*-
+import glob
 import os.path as op
 import numpy as np
 
@@ -11,9 +12,7 @@ from keras.layers.core import Dense
 from keras.layers.core import Dropout
 from keras.layers.core import Flatten
 from keras.models import Sequential
-from keras.callbacks import EarlyStopping
 from keras.callbacks import LearningRateScheduler
-from keras.callbacks import ProgbarLogger
 from keras.optimizers import Adam
 from keras.optimizers import SGD
 from keras.regularizers import l2, activity_l2
@@ -32,15 +31,12 @@ def preprocess(dirname, filename, height=64, width=64, var_kind=7, var_amount=8)
     if var_kind // 4 == 1:
         flag3 = True
     
-    num = 1
+    num = 0
     arrlist = []
     myadd = arrlist.append
-    while True:
-        f_num = dirname + "/" + filename + "_" + str(num) + ".jpg"
-        if op.isfile(f_num) == False:
-            print(">> " + dirname + "から" + str(num-1) + "個のファイル読み込み成功")
-            break
-        img = load_img(f_num, target_size=(height, width))
+    files = glob.glob(dirname + "/*.jpg")
+    for imgfile in files:
+        img = load_img(imgfile, target_size=(height, width))
         array = img_to_array(img) / 255
         myadd(array)
         if var_kind != 0:
@@ -56,8 +52,9 @@ def preprocess(dirname, filename, height=64, width=64, var_kind=7, var_amount=8)
         num += 1
         
     nplist = np.array(arrlist)
-    np.save(filename + "_array.npy", nplist)
+    np.save(filename, nplist)
     print(str(nplist))
+    print(">> " + dirname + "から" + str(num) + "個のファイル読み込み成功")
     return nplist
 
 
@@ -95,7 +92,6 @@ def build_deep_cnn(ipshape=(32, 32, 3), num_classes=3):
     model.compile(loss='categorical_crossentropy',
                   optimizer=adam,
                   metrics=['accuracy'])
-    progbar = ProgbarLogger()
 
     return model
 
@@ -103,7 +99,7 @@ def build_deep_cnn(ipshape=(32, 32, 3), num_classes=3):
 ################################
 ############# 学習 #############
 ################################
-def learning():
+def learning(tsnum=34, nb_epoch=50, batch_size=8):
     X_TRAIN_list = []; Y_TRAIN_list = []; X_TEST_list = []; Y_TEST_list = [];
     target = 0
     while True:
@@ -115,7 +111,6 @@ def learning():
         if filename == "END":
             break
         data = np.load(filename)
-        tsnum = 34 # data.shape[0] // 10
         trnum = data.shape[0] - tsnum
         X_TRAIN_list += [data[i] for i in range(trnum)]
         Y_TRAIN_list += [target] * trnum
@@ -125,8 +120,6 @@ def learning():
 
     X_TRAIN = np.array(X_TRAIN_list + X_TEST_list)
     Y_TRAIN = np.array(Y_TRAIN_list + Y_TEST_list)
-    # X_TEST  = np.array(X_TEST_list)
-    # Y_TEST  = np.array(Y_TEST_list)
     print(">> 学習サンプル数 : ", X_TRAIN.shape)
     y_train = np_utils.to_categorical(Y_TRAIN, target+1)
     
@@ -145,10 +138,7 @@ def learning():
         return Schedule(init)
     
     lrs = LearningRateScheduler(get_schedule_func(0.001))
-    es = EarlyStopping(patience=5)
     model = build_deep_cnn(ipshape=(X_TRAIN.shape[1], X_TRAIN.shape[2], X_TRAIN.shape[3]), num_classes=target+1)
-    nb_epoch = 50
-    batch_size = 8
     
     print(">> 学習開始")
     hist = model.fit(X_TRAIN, y_train,
@@ -164,28 +154,23 @@ def learning():
 ################################
 yesno = input(">> 画像データをnumpyデータに変換しますか？(y/n) : ")
 if yesno.lower() == "y" or yesno.lower() == "yes":
-    print(">> ※ファイル名が連番で「***_数字.jpg」となってないと読み込みません。")
+    print(">> 拡張子が.jpgのファイルのみ読み込みます。")
     while True:
     
         # ディレクトリ名入力
         while True:
-            dirname = input(">> 画像ディレクトリ名(「END」で終了)：")
+            dirname = input(">> 画像のあるディレクトリ(「END」で終了)：")
             if op.isdir(dirname) or dirname == "END":
                 break
             print(">> そのディレクトリは存在しません！")
         if dirname == "END":
             break
             
-        # ファイル名入力
-        while True:
-            filename = input(">> 画像ファイル名(アンダーバー前のみを入力)：")
-            if op.isfile(dirname + "/" + filename + "_1.jpg"):
-                break
-            print(">> そのファイルは存在しません！")
-        
+        filename = input(">> 保存ファイル名：")
+            
         # 関数実行
         preprocess(dirname, filename, height=32, width=32, var_kind=1, var_amount=3)
         
 yesno = input(">> 学習を実行しますか？(y/n) : ")
 if yesno.lower() == "y" or yesno.lower() == "yes":
-    learning()
+    learning(tsnum=34, nb_epoch=50, batch_size=8)
