@@ -12,10 +12,12 @@ from keras.layers.core import Dense
 from keras.layers.core import Dropout
 from keras.layers.core import Flatten
 from keras.models import Sequential
+from keras.models import model_from_json
 from keras.callbacks import LearningRateScheduler
+from keras.callbacks import ModelCheckpoint
 from keras.optimizers import Adam
 from keras.optimizers import SGD
-from keras.regularizers import l2, activity_l2
+# from keras.regularizers import l2, activity_l2
 from keras.utils import np_utils
 
 
@@ -30,7 +32,7 @@ def preprocess(dirname, filename, height=64, width=64, var_kind=7, var_amount=8)
         flag2 = True
     if var_kind // 4 == 1:
         flag3 = True
-    
+
     num = 0
     arrlist = []
     myadd = arrlist.append
@@ -50,7 +52,7 @@ def preprocess(dirname, filename, height=64, width=64, var_kind=7, var_amount=8)
                     arr2 = random_zoom(arr2, zoom_range=(0.5, 1.0))
                 myadd(arr2)
         num += 1
-        
+
     nplist = np.array(arrlist)
     np.save(filename, nplist)
     print(str(nplist))
@@ -67,7 +69,7 @@ def build_deep_cnn(ipshape=(32, 32, 3), num_classes=3):
     model.add(Convolution2D(96, 3, 3, border_mode='same', input_shape=ipshape))
     model.add(Activation('relu'))
 
-    model.add(Convolution2D(128, 3, 3))
+    model.add(Convolution2D(128, 3, 3))#, W_regularizer=l2(0.01), activity_regularizer=activity_l2(0.01)))
     model.add(Activation('relu'))
     model.add(MaxPooling2D(pool_size=(2, 2)))
     model.add(Dropout(0.5))
@@ -86,30 +88,31 @@ def build_deep_cnn(ipshape=(32, 32, 3), num_classes=3):
     model.add(Dropout(0.5))
 
     model.add(Dense(num_classes))
-    model.add(Activation('softmax'))    
-    
+    model.add(Activation('softmax'))
+
     adam = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08)
     model.compile(loss='categorical_crossentropy',
                   optimizer=adam,
                   metrics=['accuracy'])
-
     return model
 
 
 ################################
 ############# 学習 #############
 ################################
-def learning(tsnum=34, nb_epoch=50, batch_size=8):
+def learning(tsnum=34, nb_epoch=50, batch_size=8, learn_schedule=0.9):
     X_TRAIN_list = []; Y_TRAIN_list = []; X_TEST_list = []; Y_TEST_list = [];
+    ClassNames = []
     target = 0
     while True:
         while True:
-            filename = input("読み込むnumpyファイル(「END」で次の処理へ)：")
+            filename = input("読み込むnumpyファイル(「END」で次の処理へ) ： ")
             if op.isfile(filename) or filename == "END":
                 break
             print("そのファイルは存在しません！")
         if filename == "END":
             break
+        ClassNames.append(input("クラス名 : "))
         data = np.load(filename)
         trnum = data.shape[0] - tsnum
         X_TRAIN_list += [data[i] for i in range(trnum)]
@@ -122,7 +125,7 @@ def learning(tsnum=34, nb_epoch=50, batch_size=8):
     Y_TRAIN = np.array(Y_TRAIN_list + Y_TEST_list)
     print(">> 学習サンプル数 : ", X_TRAIN.shape)
     y_train = np_utils.to_categorical(Y_TRAIN, target+1)
-    
+
     # 学習率の変更
     class Schedule(object):
         def __init__(self, init=0.001):
@@ -130,23 +133,66 @@ def learning(tsnum=34, nb_epoch=50, batch_size=8):
         def __call__(self, epoch):
             lr = self.init
             for i in range(1, epoch+1):
-                if i%5==0:
-                    lr *= 0.5
+                lr *= learn_schedule
             return lr
-    
+
     def get_schedule_func(init):
         return Schedule(init)
-    
+
     lrs = LearningRateScheduler(get_schedule_func(0.001))
+    mcp = ModelCheckpoint(filepath='bestparam_kic1.hdf5', monitor='val_loss', verbose=1, save_best_only=True, mode='auto')
     model = build_deep_cnn(ipshape=(X_TRAIN.shape[1], X_TRAIN.shape[2], X_TRAIN.shape[3]), num_classes=target+1)
-    
+
     print(">> 学習開始")
     hist = model.fit(X_TRAIN, y_train,
                      batch_size=batch_size,
                      verbose=1,
                      nb_epoch=nb_epoch,
                      validation_split=0.1,
-                     callbacks=[lrs])
+                     callbacks=[lrs, mcp])
+
+    ClassNames.append("学習範囲外")
+    json_string = model.to_json()
+    json_string += '##########' + str(ClassNames)
+    open('model_kic1.json', 'w').write(json_string)
+    model.save_weights('lastparam_kic1.hdf5')
+
+
+################################
+########## 試行・実験 ##########
+################################
+def testprocess(height=32, width=32):
+
+    while True:
+        modelname = input(">> ロードするモデルグラフのファイル名を入力 : ")
+        if op.isfile(modelname):
+            break
+        print(">> そのファイルは存在しません！")
+    while True:
+        filename = input(">> ロードする学習済みパラメータのファイル名を入力 : ")
+        if op.isfile(filename):
+            break
+        print(">> そのファイルは存在しません！")
+
+    modelname_text = open(modelname).read()
+    json_strings = modelname_text.split('##########')
+    textlist = json_strings[1].replace("[", "").replace("]", "").replace("\'", "").split()
+    model = model_from_json(json_strings[0])
+    model.load_weights(filename)
+
+    while True:
+        while True:
+            imgname = input("\n>> 入力したい画像ファイル(「END」で終了) ： ")
+            if op.isfile(imgname) or imgname == "END":
+                break
+            print(">> そのファイルは存在しません！")
+        if imgname == "END":
+            break
+        img = load_img(imgname, target_size=(height, width))
+        TEST = img_to_array(img) / 255
+        pred = model.predict(np.array([TEST]), batch_size=1, verbose=0)
+        print(">> 計算結果↓\n" + str(pred))
+        print(">> この画像は「" + textlist[np.argmax(pred)].replace(",", "") + "」です。")
 
 
 ################################
@@ -156,21 +202,25 @@ yesno = input(">> 画像データをnumpyデータに変換しますか？(y/n) 
 if yesno.lower() == "y" or yesno.lower() == "yes":
     print(">> 拡張子が.jpgのファイルのみ読み込みます。")
     while True:
-    
+
         # ディレクトリ名入力
         while True:
-            dirname = input(">> 画像のあるディレクトリ(「END」で終了)：")
+            dirname = input(">> 画像のあるディレクトリ(「END」で終了) ： ")
             if op.isdir(dirname) or dirname == "END":
                 break
             print(">> そのディレクトリは存在しません！")
         if dirname == "END":
             break
-            
-        filename = input(">> 保存ファイル名：")
-            
+
+        filename = input(">> 保存ファイル名 ： ")
+
         # 関数実行
         preprocess(dirname, filename, height=32, width=32, var_kind=1, var_amount=3)
-        
+
 yesno = input(">> 学習を実行しますか？(y/n) : ")
 if yesno.lower() == "y" or yesno.lower() == "yes":
-    learning(tsnum=34, nb_epoch=50, batch_size=8)
+    learning(tsnum=34, nb_epoch=50, batch_size=8, learn_schedule=0.9)
+
+yesno = input(">> 学習したモデルで画像分類をしますか？(y/n) : ")
+if yesno.lower() == "y" or yesno.lower() == "yes":
+    testprocess(height=32, width=32)
